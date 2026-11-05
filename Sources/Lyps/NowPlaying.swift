@@ -86,9 +86,24 @@ final class NowPlayingBridge {
 
     var isAvailable: Bool { command != nil }
 
+    /// macOS moves a downloaded app to a read-only location if it's opened without being moved first.
+    static var needsMovingToApplications: Bool { Bundle.main.bundlePath.contains("/AppTranslocation/") }
+
     func start() {
         wanted = true
+        let bundle = Bundle.main.bundleURL
+        if bundle.pathExtension == "app" { Self.clearQuarantine(in: bundle) }
         launch()
+    }
+
+    /// perl refuses to load the bridge from an app bundle still flagged as downloaded. Running at all
+    /// means the user already approved this app in Privacy & Security, so the flag has done its job.
+    static func clearQuarantine(in folder: URL) {
+        let contents = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)
+        for case let url as URL in contents?.allObjects ?? [] {
+            removexattr(url.path, "com.apple.quarantine", XATTR_NOFOLLOW)
+        }
+        removexattr(folder.path, "com.apple.quarantine", XATTR_NOFOLLOW)
     }
 
     func stop() {

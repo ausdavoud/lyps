@@ -72,6 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let status: String
         if !model.bridge.isAvailable {
             status = "Now Playing bridge is missing"
+        } else if NowPlayingBridge.needsMovingToApplications {
+            status = "Move Lyps to Applications, then reopen it"
         } else if !model.bridgeHealthy {
             status = "Can't read Now Playing. A macOS update may have blocked it."
         } else if let track = model.track {

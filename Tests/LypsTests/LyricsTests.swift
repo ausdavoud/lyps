@@ -165,6 +165,30 @@ import Testing
     }
 }
 
+@Suite struct Quarantine {
+    @Test func clearsTheFlagThroughoutTheFolderOnly() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inside = root.appendingPathComponent("Versions/A")
+        try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+        let library = inside.appendingPathComponent("Library")
+        let outside = root.deletingLastPathComponent().appendingPathComponent("\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try Data().write(to: library)
+        try Data().write(to: outside)
+
+        let flag = "0083;00000000;Safari;"
+        func isFlagged(_ url: URL) -> Bool { getxattr(url.path, "com.apple.quarantine", nil, 0, 0, 0) > 0 }
+        for url in [root, library, outside] { setxattr(url.path, "com.apple.quarantine", flag, flag.utf8.count, 0, 0) }
+        #expect(isFlagged(library))
+
+        NowPlayingBridge.clearQuarantine(in: root)
+        #expect(!isFlagged(root))
+        #expect(!isFlagged(library))
+        #expect(isFlagged(outside))
+    }
+}
+
 @Suite struct TelegramResuming {
     private let song = Track(title: "Jojo", artist: "Winona Oak", duration: 204)
 

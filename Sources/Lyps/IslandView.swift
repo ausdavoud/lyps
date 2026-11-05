@@ -29,6 +29,8 @@ struct IslandView: View {
         .padding(.horizontal, 10)
         .frame(width: Self.width, height: Self.height)
         .contentShape(.rect(cornerRadius: 24))
+        // Sits between the glass and the text, so white text stays readable on bright wallpapers.
+        .background(.black.opacity(0.24), in: .rect(cornerRadius: 24))
         .glassEffect(.regular.tint(model.tint.opacity(0.22)), in: .rect(cornerRadius: 24))
         .environment(\.colorScheme, .dark)
         .opacity(shown ? 1 : 0)
@@ -127,7 +129,7 @@ struct IslandView: View {
         let y: CGFloat, scale: CGFloat, opacity: Double, blur: CGFloat
         switch delta {
         case 0: (y, scale, opacity, blur) = (currentY, 1, 1, 0)
-        case 1: (y, scale, opacity, blur) = (currentY + 21, 0.8, showNext ? 0.45 : 0, 0)
+        case 1: (y, scale, opacity, blur) = (currentY + 21, 0.8, showNext ? 0.6 : 0, 0)
         case let d where d < 0: (y, scale, opacity, blur) = (currentY - 22, 0.92, 0, 3)
         default: (y, scale, opacity, blur) = (currentY + 40, 0.8, 0, 0)
         }
