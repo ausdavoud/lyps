@@ -26,6 +26,9 @@ final class Settings {
     var telegram = bool("telegram", true) { didSet { save(telegram, "telegram") } }
     // Off by default: on, the title of every video that plays is sent to LRCLIB.
     var browsers = bool("browsers", false) { didSet { save(browsers, "browsers") } }
+    var adMute = AdMuteMode(rawValue: store.string(forKey: "adMute") ?? "") ?? .off {
+        didSet { save(adMute.rawValue, "adMute") }
+    }
 
     var toggleLyricsShortcut = shortcut("toggleLyricsShortcut", .toggleLyrics) {
         didSet { save(try? JSONEncoder().encode(toggleLyricsShortcut), "toggleLyricsShortcut") }

@@ -8,6 +8,6 @@ let package = Package(
     platforms: [.macOS(.v26)],
     targets: [
         .executableTarget(name: "Lyps", swiftSettings: settings),
-        .testTarget(name: "LypsTests", dependencies: ["Lyps"], swiftSettings: settings),
+        .testTarget(name: "LypsTests", dependencies: ["Lyps"], resources: [.copy("Fixtures")], swiftSettings: settings),
     ]
 )

@@ -13,6 +13,17 @@ final class AppModel {
 
     let settings: Settings
     let bridge = NowPlayingBridge()
+    private let spotifyMute = SpotifyMute()
+    @ObservationIgnored private lazy var lastAdMute = settings.adMute
+    @ObservationIgnored private lazy var adMuter = AdMuter(
+        mute: { [weak self] in
+            guard let self else { return }
+            self.settings.adMute.mute(spotifyOnly: { self.spotifyMute.mute() }, everything: SystemMute.mute)
+        },
+        unmute: { [weak self] in
+            self?.spotifyMute.unmute()
+            SystemMute.unmute()
+        })
 
     private(set) var track: Track?
     private(set) var status = LyricsStatus.loading
@@ -46,6 +57,9 @@ final class AppModel {
     private var telegramArtwork: String?
     private var telegramPosition: TimeInterval = 0
     private var telegramRate: Double = 1
+    private var spotifyAd = SpotifyAdClock()
+    private var adEndCheck: DispatchWorkItem?
+    private var spotifyPoll: Timer?
     private var lookup: Task<Void, Never>?
     private var lineTimer: DispatchWorkItem?
     private var hideTimer: DispatchWorkItem?
@@ -63,10 +77,13 @@ final class AppModel {
             guard let self else { return }
             self.reported.apply(message)
             self.followTelegramAfterVoice()
+            self.spotifyAd.observe(self.reported)
+            self.updateAdMute()
             self.refresh()
         }
         bridge.onHealthChange = { [weak self] healthy in self?.bridgeHealthy = healthy }
         if settings.enabled { bridge.start() }
+        updateSpotifyPoll()
     }
 
     // MARK: Commands
@@ -112,8 +129,49 @@ final class AppModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timer)
     }
 
+    private func updateSpotifyPoll() {
+        let wanted = settings.enabled && settings.adMute != .off
+        if wanted, spotifyPoll == nil {
+            spotifyPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pollSpotify() }
+            }
+        } else if !wanted {
+            spotifyPoll?.invalidate()
+            spotifyPoll = nil
+        }
+    }
+
+    private func pollSpotify() {
+        SpotifyScript.ask { [weak self] spotify in
+            guard let self, self.settings.adMute != .off else { return }
+            self.spotifyAd.observe(spotify)
+            self.updateAdMute()
+        }
+    }
+
+    private func updateAdMute() {
+        adMuter.update(adPlaying: settings.adMute != .off && spotifyAd.adPlaying())
+        adEndCheck?.cancel()
+        guard let endsAt = spotifyAd.endsAt, endsAt > Date() else { return }
+        // Wakes when the ad should end, in case Spotify isn't the app macOS reports by then.
+        let check = DispatchWorkItem { [weak self] in self?.updateAdMute() }
+        adEndCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + endsAt.timeIntervalSinceNow + 0.1, execute: check)
+    }
+
+    /// Gives sound back now: on quit, and when ad muting is turned off.
+    func releaseAdMute() {
+        adMuter.release()
+    }
+
     /// Settings changed: sources, the master switch, and so on.
     func settingsChanged() {
+        if settings.adMute == .off || !settings.enabled { adMuter.release() }
+        let prompts = AdMuteMode.prompts(from: lastAdMute, to: settings.adMute)
+        if prompts.audioCapture { spotifyMute.requestPermission() }
+        if prompts.automation { SpotifyScript.requestPermission() }
+        lastAdMute = settings.adMute
+        updateSpotifyPoll()
         if settings.enabled {
             bridge.start()
         } else {
@@ -128,6 +186,10 @@ final class AppModel {
 
     private func refresh() {
         log.debug("update app=\(self.state.bundleID, privacy: .public) title=\(self.state.title, privacy: .private(mask: .hash)) titleEmpty=\(self.state.title.isEmpty, privacy: .public) playing=\(self.state.isPlaying, privacy: .public) position=\(self.state.position(), privacy: .public) duration=\(self.state.duration, privacy: .public)")
+        if AdDetector.isSpotifyAd(state) {
+            log.debug("ignored: Spotify ad")
+            return clearTrack()
+        }
         guard settings.enabled, let source = Source(bundleID: state.bundleID), settings.allows(source) else {
             log.debug("ignored: off, unknown app or source disabled")
             clearTrack()

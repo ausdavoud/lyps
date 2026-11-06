@@ -140,6 +140,9 @@ struct PlaybackState {
     var album: String { fields["album"] as? String ?? "" }
     var isPlaying: Bool { fields["playing"] as? Bool ?? false }
     var artworkBase64: String? { fields["artworkData"] as? String }
+    var mediaType: String { fields["mediaType"] as? String ?? "" }
+    var trackNumber: Int? { (fields["trackNumber"] as? NSNumber)?.intValue }
+    var isAdvertisement: Bool { fields["isAdvertisement"] as? Bool ?? false }
     var duration: TimeInterval { (fields["durationMicros"] as? Double ?? 0) / 1_000_000 }
     /// Browsers report through helper processes, so the parent app is the one that identifies them.
     var bundleID: String {

@@ -29,6 +29,18 @@ struct SettingsView: View {
                 Text("Song titles and artists are sent to LRCLIB to find lyrics. With Browsers on, that includes the title of any video that plays. Telegram voice messages are never sent.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Picker("Mute Spotify ads", selection: $settings.adMute) {
+                    Text("Off").tag(AdMuteMode.off)
+                    Text("Mute all sound").tag(AdMuteMode.system)
+                    Text("Mute only Spotify").tag(AdMuteMode.app)
+                }
+            } header: {
+                Text("Ads")
+            } footer: {
+                Text("Sound comes back as soon as the ad ends. Muting only Spotify needs the System Audio Recording permission, which macOS asks for the first time; Lyps doesn't record or listen to anything. YouTube ads can't be detected.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Shortcuts") {
                 ShortcutRow(title: "Show or hide lyrics", shortcut: $settings.toggleLyricsShortcut,
                             fallback: .toggleLyrics, failed: shortcutFailures.contains("lyrics"), setRecording: setRecording)

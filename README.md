@@ -50,6 +50,7 @@ Play a song in Spotify or Telegram and Lyps shows the current line, with the nex
 - **Everything is switchable.** Always-on-top, auto-show, artwork, next line, each source and every shortcut.
 - **Small and quiet.** A menu bar app with no Dock icon. It wakes only when the next line is due instead of polling.
 - **Right-to-left aware.** Persian, Arabic and Hebrew lines align to the right.
+- **Mutes Spotify ads.** Optional: silence everything, or only Spotify, while an ad plays. Sound comes back when the ad ends.
 
 ## Download
 
@@ -68,7 +69,7 @@ To check your download first, compare `shasum -a 256 Lyps-*.dmg` with the checks
 
 ## Settings and privacy
 
-**Lyps asks for no special permissions.** You won't need to allow it under Accessibility, Input Monitoring, Screen Recording, Automation or Microphone, and it can't read your screen or your keystrokes. Its shortcuts use a system API that only reports the key combinations it registered. After a Telegram voice message, it checks whether Telegram is producing sound, which tells it nothing about what the sound is.
+**Lyps asks for no special permissions** unless you turn on ad muting. You won't need to allow it under Accessibility, Input Monitoring, Screen Recording or Microphone, and it can't read your screen or your keystrokes. Its shortcuts use a system API that only reports the key combinations it registered. After a Telegram voice message, it checks whether Telegram is producing sound, which tells it nothing about what the sound is.
 
 **What leaves your Mac:** the title, artist, album and duration of playing songs go to [LRCLIB](https://lrclib.net) to find lyrics. There's no account or analytics.
 
@@ -85,6 +86,20 @@ You can turn each source off in Settings. Turning Lyps off stops it reading Now 
 <p align="center">
   <img src="docs/screenshots/settings.png" width="420" alt="The Lyps Settings window with switches for behavior, island, sources and shortcuts">
 </p>
+
+### Muting Spotify ads
+
+Off by default. Turn it on in **Settings → Ads**, and macOS asks for what that mode needs, only at that moment:
+
+| Mode | Mutes | macOS asks for |
+|---|---|---|
+| Mute all sound | Your Mac's output, during the ad | **Automation** for Spotify |
+| Mute only Spotify | Spotify alone; everything else keeps playing | **Automation** for Spotify, and **System Audio Recording** |
+
+- **Automation** lets Lyps ask Spotify what it's playing, once a second while Spotify is open. macOS sometimes keeps showing another app as playing while Spotify plays on, and asking Spotify directly catches ads anyway. Lyps only reads the current track; it never controls Spotify or opens it.
+- **System Audio Recording** is how macOS lets an app silence another app. Lyps receives Spotify's sound during the ad and discards it; nothing is saved, analyzed or sent anywhere.
+- If you decline, ads are still caught whenever macOS shows Spotify as playing, and muting only Spotify falls back to muting all sound.
+- If Lyps quits in the middle of an ad, your sound is restored the next time it opens.
 
 ## Shortcuts
 
@@ -118,6 +133,7 @@ flowchart LR
 - **Lyric quality varies.** Timings are submitted by volunteers, so some are off, and the nudge shifts a whole song rather than a single verse. Coverage is thinner for less mainstream music, and Telegram files with poor tags match less often.
 - **Songs without synced lyrics** show their name briefly, then the island hides.
 - **Telegram after a voice message.** Telegram resumes the song but stops reporting it to macOS. Lyps keeps the lyrics going from where the song paused, using Telegram's sound to follow pause and play. Seeking in that state isn't tracked until the next track.
+- **Spotify ads only.** YouTube reports its ads to macOS as ordinary videos, so they can't be told apart without a browser extension. An ad longer than about a minute isn't recognized.
 - **Mac only for now.** It can't be on the App Store, because the bridge isn't allowed in the sandbox. Builds include Apple Silicon and Intel, but only Apple Silicon has been tested.
 
 ## Build from source

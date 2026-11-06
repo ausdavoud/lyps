@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingShortcut = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        SystemMute.unmute() // in case Lyps quit mid-ad last time
         settings.onChange = { [weak self] in
             guard let self else { return }
             self.panel.applySettings()
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        model.releaseAdMute()
         model.bridge.stop()
     }
 

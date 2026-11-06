@@ -15,13 +15,17 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.1</string>
+	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Lyps asks Spotify what it's playing, so it can mute ads. It only reads the current track.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Lyps silences Spotify while an ad plays, if you choose “Mute only Spotify”. It doesn't record or listen to any audio.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

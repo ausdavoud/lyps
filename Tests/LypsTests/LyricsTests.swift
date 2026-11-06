@@ -347,3 +347,156 @@ import Testing
         #expect(resume.isFinished(at: start.addingTimeInterval(7)))
     }
 }
+
+@Suite struct Ads {
+    private func state(_ payload: [String: Any]) -> PlaybackState {
+        var state = PlaybackState()
+        state.apply(["type": "data", "diff": false, "payload": payload])
+        return state
+    }
+
+    // Payloads from a real recording of Spotify Free.
+    @Test func spotifyAdsAreDetected() {
+        #expect(AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "Disney+", "artist": "Disney+", "album": "",
+            "mediaType": "kMRMediaRemoteNowPlayingInfoTypeVideo", "trackNumber": 0, "durationMicros": 30_000_000.0, "playing": true,
+        ])))
+        #expect(AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "Spotify – Advertisement", "artist": "", "album": "",
+            "durationMicros": 30_060_000.0, "playing": true,
+        ])))
+        // An audio-only ad, which the first version missed.
+        #expect(AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "Experience classic operas at the Met",
+            "artist": "The Metropolitan Opera", "album": "", "mediaType": "kMRMediaRemoteNowPlayingInfoTypeAudio",
+            "trackNumber": 0, "durationMicros": 30_000_000.0, "playing": true,
+        ])))
+    }
+
+    @Test func anUntaggedLocalFileIsNotAnAd() {
+        #expect(!AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "track01", "artist": "", "album": "",
+            "mediaType": "kMRMediaRemoteNowPlayingInfoTypeAudio", "trackNumber": 0, "durationMicros": 215_000_000.0,
+        ])))
+    }
+
+    @Test func songsAreNotAds() {
+        #expect(!AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "Bluebird", "artist": "Lola Marsh", "album": "Remember Roses",
+            "mediaType": "kMRMediaRemoteNowPlayingInfoTypeAudio", "trackNumber": 5, "playing": true,
+        ])))
+        // A video with an album, like a video podcast, isn't taken for an ad.
+        #expect(!AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "com.spotify.client", "title": "Episode 12", "album": "Some Show",
+            "mediaType": "kMRMediaRemoteNowPlayingInfoTypeVideo", "trackNumber": 0,
+        ])))
+    }
+
+    @Test func youtubeAdsLookLikeVideosSoAreLeftAlone() {
+        #expect(!AdDetector.isSpotifyAd(state([
+            "bundleIdentifier": "org.chromium.Chromium", "title": "Science-backed. Thor-approved.",
+            "artist": "OfficialHillsPet", "album": "", "durationMicros": 30_060_000.0, "playing": true,
+        ])))
+    }
+
+    @MainActor @Test func mutesAtOnceAndUnmutesOnlyAfterTheAdReallyEnds() async throws {
+        var log: [String] = []
+        let muter = AdMuter(settle: 0.2, mute: { log.append("mute") }, unmute: { log.append("unmute") })
+        muter.update(adPlaying: true)
+        muter.update(adPlaying: true)
+        #expect(log == ["mute"])
+        // The recorded glitch: the next song appears for a moment mid-ad.
+        muter.update(adPlaying: false)
+        try await Task.sleep(for: .milliseconds(50))
+        muter.update(adPlaying: true)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(log == ["mute"])
+        muter.update(adPlaying: false)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(log == ["mute", "unmute"])
+    }
+
+    @MainActor @Test func releaseUnmutesImmediately() {
+        var log: [String] = []
+        let muter = AdMuter(mute: { log.append("mute") }, unmute: { log.append("unmute") })
+        muter.release()
+        #expect(log.isEmpty)
+        muter.update(adPlaying: true)
+        muter.release()
+        #expect(log == ["mute", "unmute"])
+    }
+}
+
+@Suite struct SpotifyAdTiming {
+    private func state(_ payload: [String: Any]) -> PlaybackState {
+        var state = PlaybackState()
+        state.apply(["type": "data", "diff": false, "payload": payload])
+        return state
+    }
+    private let t0 = Date(timeIntervalSince1970: 2_000_000)
+
+    // From a real recording: a 19-second Spotify ad, then Telegram started "Jojo" 5 seconds in.
+    @Test func anotherAppStartingDoesNotEndTheAd() {
+        var clock = SpotifyAdClock()
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "Spotify", "album": "", "trackNumber": 0,
+                             "durationMicros": 19_000_000.0, "elapsedTimeMicros": 0.0, "playing": true,
+                             "timestampEpochMicros": t0.timeIntervalSince1970 * 1_000_000, "playbackRate": 1.0]), at: t0)
+        let telegram = t0.addingTimeInterval(5)
+        clock.observe(state(["bundleIdentifier": "com.tdesktop.Telegram", "title": "Jojo", "artist": "Winona Oak", "playing": true]), at: telegram)
+        #expect(clock.adPlaying(at: telegram.addingTimeInterval(2)))
+        #expect(clock.adPlaying(at: t0.addingTimeInterval(18.5)))
+        #expect(!clock.adPlaying(at: t0.addingTimeInterval(19.5)))
+    }
+
+    // From a real recording: "New York City Ballet" arrived claiming 30.06s into a 30s ad.
+    @Test func aStalePositionAtTheStartIsTakenAsANewAd() {
+        var clock = SpotifyAdClock()
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "New York City Ballet", "album": "", "trackNumber": 0,
+                             "durationMicros": 30_000_000.0, "elapsedTimeMicros": 30_060_000.0, "playing": false]), at: t0)
+        #expect(clock.adPlaying(at: t0.addingTimeInterval(11)))
+        #expect(!clock.adPlaying(at: t0.addingTimeInterval(31)))
+    }
+
+    @Test func aSongFromSpotifyEndsTheAdAtOnce() {
+        var clock = SpotifyAdClock()
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "Disney+", "album": "", "trackNumber": 0,
+                             "durationMicros": 30_000_000.0, "elapsedTimeMicros": 0.0, "playing": false]), at: t0)
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "Bluebird", "album": "Remember Roses",
+                             "trackNumber": 5, "durationMicros": 200_000_000.0, "playing": true]), at: t0.addingTimeInterval(1))
+        #expect(!clock.adPlaying(at: t0.addingTimeInterval(2)))
+    }
+
+    @Test func aDataGapFromSpotifyDoesNotEndTheAd() {
+        var clock = SpotifyAdClock()
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "Purdue University Online", "album": "",
+                             "trackNumber": 0, "durationMicros": 30_000_000.0, "elapsedTimeMicros": 0.0, "playing": false]), at: t0)
+        clock.observe(state(["bundleIdentifier": "com.spotify.client", "playing": true]), at: t0.addingTimeInterval(1))
+        #expect(clock.adPlaying(at: t0.addingTimeInterval(2)))
+    }
+}
+
+@Suite struct SpotifyAnswers {
+    private let sep = "\u{1F}"
+
+    @Test func anAdByItsID() throws {
+        let state = try #require(SpotifyScript.state(from: ["playing", "spotify:ad:000000012c603a6600000020316a17a1", "Carvana", "", "0", "30066", "8,4"].joined(separator: sep)))
+        #expect(state.isAdvertisement)
+        #expect(state.isPlaying)
+        #expect(abs(state.duration - 30.066) < 0.001)
+        #expect(AdDetector.isSpotifyAd(state))
+    }
+
+    @Test func aSong() throws {
+        let state = try #require(SpotifyScript.state(from: ["paused", "spotify:track:4Pq0kZ3uOEcJmEFmXxqZXL", "Bluebird", "Remember Roses", "5", "200990", "12.5"].joined(separator: sep)))
+        #expect(!state.isAdvertisement)
+        #expect(!state.isPlaying)
+        #expect(state.title == "Bluebird")
+        #expect(abs(state.position() - 12.5) < 0.001)
+        #expect(!AdDetector.isSpotifyAd(state))
+    }
+
+    @Test func stoppedOrGarbledAnswers() {
+        #expect(SpotifyScript.state(from: "stopped") == nil)
+        #expect(SpotifyScript.state(from: "playing\u{1F}x") == nil)
+    }
+}
