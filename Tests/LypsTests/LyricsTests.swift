@@ -190,23 +190,28 @@ import Testing
 }
 
 @Suite struct TelegramResuming {
-    private let song = Track(title: "Jojo", artist: "Winona Oak", duration: 204)
+    private let song = Track(title: "Potk", artist: "A", duration: 168)
 
-    @Test func noTitleMeansTheSameSongIsStillPlaying() {
-        #expect(TelegramResume.song(title: "", position: 16, remembered: song) == song)
+    // Positions below are from a real recording: the song paused at 5.4s for a voice message.
+    @Test func resumingFromThePausePointContinuesTheSong() {
+        #expect(TelegramResume.song(title: "", position: 5.6, remembered: song, pausedAt: 5.4) == song)
+    }
+
+    @Test func aReplayedVoiceMessageStartsNearZeroAndIsNotTheSong() {
+        #expect(TelegramResume.song(title: "", position: 0.3, remembered: song, pausedAt: 5.4) == nil)
+    }
+
+    @Test func theGapBetweenTracksIsNotTheSong() {
+        #expect(TelegramResume.song(title: "", position: 0.1, remembered: song, pausedAt: 4.1) == nil)
     }
 
     @Test func aRealTitleOrNothingRememberedDoesNotResume() {
-        #expect(TelegramResume.song(title: "Other", position: 16, remembered: song) == nil)
-        #expect(TelegramResume.song(title: "", position: 16, remembered: nil) == nil)
-    }
-
-    @Test func aPositionPastTheEndIsSomethingElse() {
-        #expect(TelegramResume.song(title: "", position: 300, remembered: song) == nil)
+        #expect(TelegramResume.song(title: "Other", position: 5.4, remembered: song, pausedAt: 5.4) == nil)
+        #expect(TelegramResume.song(title: "", position: 5.4, remembered: nil, pausedAt: 5.4) == nil)
     }
 
     @Test func aVoiceMessageNeverGetsRemembered() {
-        #expect(TelegramResume.song(title: "today at 14:02", position: 3, remembered: song) == nil)
+        #expect(TelegramResume.song(title: "today at 14:02", position: 3, remembered: song, pausedAt: 3) == nil)
         #expect(!Privacy.isSafeTelegramLookup(title: "", artist: ""))
     }
 }
@@ -282,5 +287,63 @@ import Testing
         cache.save([LyricLine(time: 1, text: "x")], for: track)
         #expect(cache.load(track) == [LyricLine(time: 1, text: "x")])
         #expect(cache.load(Track(title: "A", artist: "C", duration: 10)) == nil)
+    }
+}
+
+@Suite struct SilentResuming {
+    // From a real recording: "Jojo" paused at 33.8s for a voice message, which was then closed.
+    private let jojo = Track(title: "Jojo", artist: "Winona Oak", duration: 204)
+    private let start = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test func startsPausedAtThePausePoint() {
+        let resume = SilentResume(song: jojo, artwork: nil, rate: 1, pausedAt: 33.8)
+        #expect(!resume.isPlaying)
+        #expect(resume.position(at: start.addingTimeInterval(60)) == 33.8)
+        #expect(!resume.reported.isPlaying)
+    }
+
+    @Test func playsOnFromThePausePointAndPausesWhereItIs() {
+        var resume = SilentResume(song: jojo, artwork: nil, rate: 1, pausedAt: 33.8)
+        resume.play(since: start)
+        #expect(abs(resume.position(at: start.addingTimeInterval(10)) - 43.8) < 0.001)
+        resume.pause(at: start.addingTimeInterval(10))
+        #expect(abs(resume.position(at: start.addingTimeInterval(99)) - 43.8) < 0.001)
+        resume.play(since: start.addingTimeInterval(20))
+        #expect(abs(resume.position(at: start.addingTimeInterval(25)) - 48.8) < 0.001)
+    }
+
+    @Test func honorsTelegramsPlaybackSpeed() {
+        var resume = SilentResume(song: jojo, artwork: nil, rate: 2, pausedAt: 10)
+        resume.play(since: start)
+        #expect(abs(resume.position(at: start.addingTimeInterval(5)) - 20) < 0.001)
+    }
+
+    @Test func reportsLikeTelegramWould() {
+        var resume = SilentResume(song: jojo, artwork: "art", rate: 1, pausedAt: 33.8)
+        resume.play(since: start)
+        let state = resume.reported
+        #expect(state.title == "Jojo")
+        #expect(state.artist == "Winona Oak")
+        #expect(Source(bundleID: state.bundleID) == .telegram)
+        #expect(state.isPlaying)
+        #expect(state.artworkBase64 == "art")
+        #expect(abs(state.position(at: start.addingTimeInterval(2)) - 35.8) < 0.001)
+    }
+
+    @Test func takesTelegramsExactPositionOnlyWhilePaused() {
+        // From a real recording: Lyps estimated 57.87s, Telegram then reported 58.69s.
+        var resume = SilentResume(song: jojo, artwork: nil, rate: 1, pausedAt: 57.87)
+        resume.correct(pausedAt: 58.69)
+        #expect(resume.position(at: start) == 58.69)
+        resume.play(since: start)
+        resume.correct(pausedAt: 10)
+        #expect(abs(resume.position(at: start.addingTimeInterval(1)) - 59.69) < 0.001)
+    }
+
+    @Test func endsPastTheSongsEnd() {
+        var resume = SilentResume(song: jojo, artwork: nil, rate: 1, pausedAt: 200)
+        resume.play(since: start)
+        #expect(!resume.isFinished(at: start.addingTimeInterval(5)))
+        #expect(resume.isFinished(at: start.addingTimeInterval(7)))
     }
 }

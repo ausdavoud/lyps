@@ -1,6 +1,10 @@
 import AppKit
 import CoreImage
+import os
 import SwiftUI
+
+/// Read with: log stream --predicate 'subsystem == "app.lyps.Lyps"'. Song names are hashed.
+private let log = Logger(subsystem: "app.lyps.Lyps", category: "playback")
 
 @Observable
 @MainActor
@@ -29,10 +33,19 @@ final class AppModel {
     private var manual: Bool?
     private var idleHidden = false
     private var noLyricsExpired = false
-    private var state = PlaybackState()
+    /// What the bridge reported. `state` is what Lyps acts on: the same, unless Telegram resumed a song silently.
+    private var reported = PlaybackState()
+    private var silentState: PlaybackState?
+    private var state: PlaybackState { silentState ?? reported }
+    private var silentResume: SilentResume?
+    private var audioWatch: Timer?
+    /// When Telegram's audio was first seen after the voice, so a brief blip doesn't count.
+    private var audioOnSince: Date?
     private var artworkSource: String?
     private var telegramSong: Track?
     private var telegramArtwork: String?
+    private var telegramPosition: TimeInterval = 0
+    private var telegramRate: Double = 1
     private var lookup: Task<Void, Never>?
     private var lineTimer: DispatchWorkItem?
     private var hideTimer: DispatchWorkItem?
@@ -48,7 +61,8 @@ final class AppModel {
         self.settings = settings
         bridge.onMessage = { [weak self] message in
             guard let self else { return }
-            self.state.apply(message)
+            self.reported.apply(message)
+            self.followTelegramAfterVoice()
             self.refresh()
         }
         bridge.onHealthChange = { [weak self] healthy in self?.bridgeHealthy = healthy }
@@ -104,7 +118,8 @@ final class AppModel {
             bridge.start()
         } else {
             bridge.stop()
-            state = PlaybackState()
+            reported = PlaybackState()
+            endSilentResume()
         }
         refresh()
     }
@@ -112,7 +127,9 @@ final class AppModel {
     // MARK: Playback
 
     private func refresh() {
+        log.debug("update app=\(self.state.bundleID, privacy: .public) title=\(self.state.title, privacy: .private(mask: .hash)) titleEmpty=\(self.state.title.isEmpty, privacy: .public) playing=\(self.state.isPlaying, privacy: .public) position=\(self.state.position(), privacy: .public) duration=\(self.state.duration, privacy: .public)")
         guard settings.enabled, let source = Source(bundleID: state.bundleID), settings.allows(source) else {
+            log.debug("ignored: off, unknown app or source disabled")
             clearTrack()
             return
         }
@@ -120,24 +137,41 @@ final class AppModel {
         var song = Track(title: state.title, artist: state.artist, album: state.album, duration: state.duration)
         var artworkData = state.artworkBase64
         if source == .telegram {
-            if let resumed = TelegramResume.song(title: state.title, position: state.position(), remembered: telegramSong) {
+            if let resumed = TelegramResume.song(title: state.title, position: state.position(), remembered: telegramSong, pausedAt: telegramPosition) {
                 song = resumed
+                log.info("telegram: no title, continuing remembered song \(resumed.title, privacy: .private(mask: .hash))")
                 // What's reported now may still be the voice sender's picture.
                 artworkData = telegramArtwork
             } else if Privacy.isSafeTelegramLookup(title: state.title, artist: state.artist) {
                 telegramSong = song
                 telegramArtwork = artworkData
+                telegramPosition = state.position()
+                if state.isPlaying { telegramRate = state.rate }
             } else {
+                if state.isPlaying, silentResume == nil, let telegramSong {
+                    // A voice message just paused this song. Telegram may resume it without saying so.
+                    silentResume = SilentResume(song: telegramSong, artwork: telegramArtwork, rate: telegramRate, pausedAt: telegramPosition)
+                    log.info("telegram: voice paused the song at \(self.telegramPosition, privacy: .public)s; watching for it to resume")
+                }
+                log.info("telegram: refused (voice message, or no title that isn't a resume) remembered=\(self.telegramSong != nil, privacy: .public) pausedAt=\(self.telegramPosition, privacy: .public)")
                 clearTrack()
                 return
             }
         }
         guard !song.title.isEmpty else {
+            log.debug("ignored: no title")
             clearTrack()
             return
         }
 
         if track?.title != song.title || track?.artist != song.artist {
+            // macOS reports the last player, paused, whenever another stops, so wait until it plays.
+            guard state.isPlaying else {
+                log.debug("ignored: new song isn't playing")
+                clearTrack()
+                return
+            }
+            log.info("new song \(song.title, privacy: .private(mask: .hash)) from \(source.rawValue, privacy: .public)")
             begin(song)
         } else if song.duration > 0 {
             track?.duration = song.duration
@@ -147,6 +181,94 @@ final class AppModel {
         syncLine()
         updateIdleTimer()
         updateVisibility()
+    }
+
+    // MARK: Telegram resuming silently after a voice message
+
+    /// Decides, on each bridge update, whether Telegram's audio is the only sign of the song.
+    private func followTelegramAfterVoice() {
+        guard var resume = silentResume, settings.enabled else { return endSilentResume() }
+        let telegram = Source(bundleID: reported.bundleID) == .telegram
+        let realSong = telegram && !reported.title.isEmpty
+            && Privacy.isSafeTelegramLookup(title: reported.title, artist: reported.artist)
+        let resumedWithoutTitle = telegram && TelegramResume.song(
+            title: reported.title, position: reported.position(), remembered: telegramSong, pausedAt: telegramPosition) != nil
+        if (realSong && reported.isPlaying) || resumedWithoutTitle {
+            log.info("telegram: reporting a song again; silent resume no longer needed")
+            return endSilentResume()
+        }
+        if telegram, reported.isPlaying {
+            // A voice message is playing, which is Telegram audio too. The song stays paused.
+            if resume.isPlaying {
+                resume.pause(at: Date())
+                silentResume = resume
+                silentState = nil
+                telegramPosition = resume.position
+            }
+            stopAudioWatch()
+            return
+        }
+        // A finished voice reported with a position longer than itself is showing the song's position.
+        if telegram, !resume.isPlaying, reported.duration > 0, reported.position() > reported.duration + 1 {
+            resume.correct(pausedAt: reported.position())
+            silentResume = resume
+            telegramPosition = resume.position
+            log.info("telegram: song will resume at \(resume.position, privacy: .public)s, as reported")
+        }
+        startAudioWatch()
+    }
+
+    private func startAudioWatch() {
+        guard audioWatch == nil else { return }
+        audioOnSince = nil
+        audioWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkTelegramAudio() }
+        }
+    }
+
+    private func stopAudioWatch() {
+        audioWatch?.invalidate()
+        audioWatch = nil
+        audioOnSince = nil
+    }
+
+    private func endSilentResume() {
+        stopAudioWatch()
+        guard silentResume != nil else { return }
+        silentResume = nil
+        silentState = nil
+    }
+
+    private func checkTelegramAudio() {
+        guard var resume = silentResume else { return stopAudioWatch() }
+        let now = Date()
+        let wasPlaying = resume.isPlaying
+        if TelegramAudio.isPlaying() {
+            let since = audioOnSince ?? now
+            audioOnSince = since
+            // Needs a full second of sound, so a voice message's tail isn't taken for the song.
+            if !resume.isPlaying, now.timeIntervalSince(since) >= 1 {
+                resume.play(since: since)
+                log.info("telegram: song resumed silently at \(resume.position, privacy: .public)s")
+            }
+        } else {
+            audioOnSince = nil
+            if resume.isPlaying {
+                resume.pause(at: now)
+                log.info("telegram: silent song paused at \(resume.position, privacy: .public)s")
+            }
+        }
+
+        if resume.isFinished(at: now) {
+            log.info("telegram: silent song reached its end")
+            endSilentResume()
+            refresh()
+        } else if resume.isPlaying != wasPlaying {
+            silentResume = resume
+            silentState = resume.reported
+            telegramPosition = resume.position(at: now)
+            refresh()
+        }
     }
 
     private func clearTrack() {
@@ -177,6 +299,7 @@ final class AppModel {
             guard !Task.isCancelled, self.track?.title == newTrack.title, self.track?.artist == newTrack.artist else { return }
             self.lines = found
             self.status = found.isEmpty ? .unavailable : .found
+            log.info("lyrics: \(found.count, privacy: .public) lines for \(newTrack.title, privacy: .private(mask: .hash))")
             self.syncLine()
             self.updateIdleTimer()
             self.updateVisibility()
@@ -240,6 +363,7 @@ final class AppModel {
         let wanted = settings.enabled && track != nil && (manual ?? automatic)
         guard wanted != isVisible else { return }
         isVisible = wanted
+        log.info("island \(wanted ? "shown" : "hidden", privacy: .public) track=\(self.track != nil, privacy: .public) manual=\(String(describing: self.manual), privacy: .public) idle=\(self.idleHidden, privacy: .public) noLyricsExpired=\(self.noLyricsExpired, privacy: .public)")
         onVisibilityChange(wanted)
     }
 

@@ -60,7 +60,7 @@ To check your download first, compare `shasum -a 256 Lyps-*.dmg` with the checks
 
 ## Settings and privacy
 
-**Lyps asks for no special permissions.** You won't need to allow it under Accessibility, Input Monitoring, Screen Recording, Automation or Microphone, and it can't read your screen or your keystrokes. Its shortcuts use a system API that only reports the key combinations it registered.
+**Lyps asks for no special permissions.** You won't need to allow it under Accessibility, Input Monitoring, Screen Recording, Automation or Microphone, and it can't read your screen or your keystrokes. Its shortcuts use a system API that only reports the key combinations it registered. After a Telegram voice message, it checks whether Telegram is producing sound, which tells it nothing about what the sound is.
 
 **What leaves your Mac:** the title, artist, album and duration of playing songs go to [LRCLIB](https://lrclib.net) to find lyrics. There's no account or analytics.
 
@@ -109,6 +109,7 @@ flowchart LR
 - **It depends on a workaround.** A macOS update could block the Now Playing bridge. Lyps would then show a warning in its menu until the bridge catches up.
 - **Lyric quality varies.** Timings are submitted by volunteers, so some are off, and the nudge shifts a whole song rather than a single verse. Coverage is thinner for less mainstream music, and Telegram files with poor tags match less often.
 - **Songs without synced lyrics** show their name briefly, then the island hides.
+- **Telegram after a voice message.** Telegram resumes the song but stops reporting it to macOS. Lyps keeps the lyrics going from where the song paused, using Telegram's sound to follow pause and play. Seeking in that state isn't tracked until the next track.
 - **Mac only for now.** It can't be on the App Store, because the bridge isn't allowed in the sandbox. Builds include Apple Silicon and Intel, but only Apple Silicon has been tested.
 
 ## Build from source
