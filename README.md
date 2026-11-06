@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/dusk.png" alt="The Lyps island over a colorful wallpaper, showing artwork, the current lyric line and a dimmer next line">
+  <img src="docs/screenshots/macbook-dusk.png" alt="A MacBook showing the Lyps island just below the menu bar, with artwork, the current lyric line and a dimmer next line">
 </p>
 
 Play a song in Spotify or Telegram and Lyps shows the current line, with the next one beneath it. It never takes focus from the app you're using, and it gets out of the way when the music stops.
@@ -31,7 +31,15 @@ Play a song in Spotify or Telegram and Lyps shows the current line, with the nex
   </tr>
 </table>
 
-<sub>Real captures of the app. The wallpapers are generated, and the lyrics are placeholder lines written for these screenshots.</sub>
+<details>
+  <summary>More screenshots</summary>
+  <br>
+  <img src="docs/screenshots/macbook-daylight.png" alt="A MacBook with a bright pastel wallpaper and the Lyps island under the menu bar">
+  <img src="docs/screenshots/macbook-forest.png" alt="A MacBook with a green wallpaper and the Lyps island showing a Persian lyric aligned to the right">
+  <img src="docs/screenshots/dusk.png" alt="Close-up of the Lyps island over a colorful wallpaper">
+</details>
+
+<sub>Real captures of the app running on an M1 MacBook. The wallpapers and menu bar are generated to keep the desktop private, and the lyrics are placeholder lines written for these screenshots.</sub>
 
 ## Features
 
