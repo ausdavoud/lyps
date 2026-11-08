@@ -33,17 +33,12 @@ import Testing
 }
 
 @Suite struct TitleCleaning {
-    @Test func youtubeTitle() {
-        let result = TitleCleaner.clean(title: "The Weeknd - Blinding Lights (Official Music Video)", artist: "TheWeekndVEVO")
-        #expect(result.title == "Blinding Lights")
-        #expect(result.artist == "The Weeknd")
+    @Test func telegramFileWithNoise() {
+        let result = TitleCleaner.clean(title: "Some Artist - Some Song (Official Audio).mp3", artist: "")
+        #expect(result.title == "Some Song")
+        #expect(result.artist == "Some Artist")
     }
 
-    @Test func topicChannel() {
-        let result = TitleCleaner.clean(title: "Blinding Lights", artist: "The Weeknd - Topic")
-        #expect(result.title == "Blinding Lights")
-        #expect(result.artist == "The Weeknd")
-    }
 
     @Test func untaggedTelegramFile() {
         let result = TitleCleaner.clean(title: "Daft_Punk - One_More_Time.mp3", artist: "")
@@ -157,11 +152,13 @@ import Testing
         #expect(abs(state.position(at: now) - 5) < 0.01)
     }
 
-    @Test func browsersAreIdentifiedByParentApp() {
-        var state = PlaybackState()
-        state.apply(message(["bundleIdentifier": "com.apple.WebKit.GPU", "parentApplicationBundleIdentifier": "com.apple.Safari"]))
-        #expect(Source(bundleID: state.bundleID) == .browser)
-        #expect(Source(bundleID: "com.example.Other") == nil)
+    @Test func onlySpotifyAndTelegramAreSources() {
+        #expect(Source(bundleID: "com.spotify.client") == .spotify)
+        #expect(Source(bundleID: "com.tdesktop.Telegram") == .telegram)
+        #expect(Source(bundleID: "ru.keepcoder.Telegram") == .telegram)
+        #expect(Source(bundleID: "org.chromium.Chromium") == nil)
+        #expect(Source(bundleID: "com.apple.Safari") == nil)
+        #expect(Source.allCases == [.spotify, .telegram])
     }
 }
 
@@ -208,6 +205,25 @@ import Testing
     @Test func aRealTitleOrNothingRememberedDoesNotResume() {
         #expect(TelegramResume.song(title: "Other", position: 5.4, remembered: song, pausedAt: 5.4) == nil)
         #expect(TelegramResume.song(title: "", position: 5.4, remembered: nil, pausedAt: 5.4) == nil)
+    }
+
+    @Test func aSongPausedInItsFirstSecondsIsNotGuessed() {
+        // A replayed voice also starts near zero, so a resume can't be told apart there.
+        #expect(TelegramResume.song(title: "", position: 1.2, remembered: song, pausedAt: 1.0) == nil)
+        #expect(TelegramResume.song(title: "", position: 0.3, remembered: song, pausedAt: 2.0) == nil)
+    }
+
+    @Test func anotherPlayerStartingEndsTheSilentResume() {
+        func reported(_ payload: [String: Any]) -> PlaybackState {
+            var state = PlaybackState()
+            state.apply(["type": "data", "diff": false, "payload": payload])
+            return state
+        }
+        #expect(TelegramResume.anotherPlayerTookOver(reported(["bundleIdentifier": "com.spotify.client", "playing": true])))
+        // A paused app, which macOS falls back to when Telegram stops reporting, isn't taking over.
+        #expect(!TelegramResume.anotherPlayerTookOver(reported(["bundleIdentifier": "org.chromium.Chromium", "playing": false])))
+        #expect(!TelegramResume.anotherPlayerTookOver(reported(["bundleIdentifier": "com.tdesktop.Telegram", "playing": true])))
+        #expect(!TelegramResume.anotherPlayerTookOver(reported(["bundleIdentifier": "com.apple.Music", "playing": true])))
     }
 
     @Test func aVoiceMessageNeverGetsRemembered() {
@@ -284,8 +300,8 @@ import Testing
         let cache = LyricsCache(directory: dir)
         let track = Track(title: "A", artist: "B", duration: 10)
         #expect(cache.load(track) == nil)
-        cache.save([LyricLine(time: 1, text: "x")], for: track)
-        #expect(cache.load(track) == [LyricLine(time: 1, text: "x")])
+        try cache.save(Lyrics(synced: [LyricLine(time: 1, text: "x")], plain: ["x"]), for: track)
+        #expect(cache.load(track) == Lyrics(synced: [LyricLine(time: 1, text: "x")], plain: ["x"]))
         #expect(cache.load(Track(title: "A", artist: "C", duration: 10)) == nil)
     }
 }
@@ -392,7 +408,7 @@ import Testing
         ])))
     }
 
-    @Test func youtubeAdsLookLikeVideosSoAreLeftAlone() {
+    @Test func otherAppsAreNeverSpotifyAds() {
         #expect(!AdDetector.isSpotifyAd(state([
             "bundleIdentifier": "org.chromium.Chromium", "title": "Science-backed. Thor-approved.",
             "artist": "OfficialHillsPet", "album": "", "durationMicros": 30_060_000.0, "playing": true,
@@ -452,7 +468,8 @@ import Testing
     @Test func aStalePositionAtTheStartIsTakenAsANewAd() {
         var clock = SpotifyAdClock()
         clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "New York City Ballet", "album": "", "trackNumber": 0,
-                             "durationMicros": 30_000_000.0, "elapsedTimeMicros": 30_060_000.0, "playing": false]), at: t0)
+                             "durationMicros": 30_000_000.0, "elapsedTimeMicros": 30_060_000.0, "playing": true,
+                             "timestampEpochMicros": t0.timeIntervalSince1970 * 1_000_000, "playbackRate": 0.0]), at: t0)
         #expect(clock.adPlaying(at: t0.addingTimeInterval(11)))
         #expect(!clock.adPlaying(at: t0.addingTimeInterval(31)))
     }
@@ -469,7 +486,8 @@ import Testing
     @Test func aDataGapFromSpotifyDoesNotEndTheAd() {
         var clock = SpotifyAdClock()
         clock.observe(state(["bundleIdentifier": "com.spotify.client", "title": "Purdue University Online", "album": "",
-                             "trackNumber": 0, "durationMicros": 30_000_000.0, "elapsedTimeMicros": 0.0, "playing": false]), at: t0)
+                             "trackNumber": 0, "durationMicros": 30_000_000.0, "elapsedTimeMicros": 0.0, "playing": true,
+                             "timestampEpochMicros": t0.timeIntervalSince1970 * 1_000_000, "playbackRate": 1.0]), at: t0)
         clock.observe(state(["bundleIdentifier": "com.spotify.client", "playing": true]), at: t0.addingTimeInterval(1))
         #expect(clock.adPlaying(at: t0.addingTimeInterval(2)))
     }
@@ -498,5 +516,39 @@ import Testing
     @Test func stoppedOrGarbledAnswers() {
         #expect(SpotifyScript.state(from: "stopped") == nil)
         #expect(SpotifyScript.state(from: "playing\u{1F}x") == nil)
+    }
+}
+
+@Suite struct PlayerChoosing {
+    private func state(_ bundle: String, playing: Bool, title: String = "x") -> PlaybackState {
+        var state = PlaybackState()
+        state.apply(["type": "data", "diff": false, "payload": ["bundleIdentifier": bundle, "playing": playing, "title": title]])
+        return state
+    }
+
+    // From a real session: Telegram paused, and macOS kept reporting it while Spotify played on.
+    @Test func spotifysOwnAnswerWinsWhenMacOSIsStuckOnAPausedApp() {
+        let stuck = state("com.tdesktop.Telegram", playing: false)
+        let spotify = state("com.spotify.client", playing: true, title: "Song")
+        #expect(PlayerChoice.current(reported: stuck, spotify: spotify).title == "Song")
+    }
+
+    @Test func macOSWinsOtherwise() {
+        let telegram = state("com.tdesktop.Telegram", playing: true, title: "Telegram song")
+        #expect(PlayerChoice.current(reported: telegram, spotify: state("com.spotify.client", playing: true)).title == "Telegram song")
+        let paused = state("com.tdesktop.Telegram", playing: false, title: "Paused")
+        #expect(PlayerChoice.current(reported: paused, spotify: state("com.spotify.client", playing: false)).title == "Paused")
+        #expect(PlayerChoice.current(reported: paused, spotify: nil).title == "Paused")
+    }
+}
+
+@Suite struct LeftoverBridges {
+    @Test func onlyThisAppsBridgeScriptMatches() throws {
+        let script = "/Applications/Lyps.app/Contents/Resources/mediaremote-adapter.pl"
+        let pattern = try Regex(NowPlayingBridge.leftoverPattern(script: script))
+        #expect("/usr/bin/perl \(script) /Applications/Lyps.app/Contents/Frameworks/MediaRemoteAdapter.framework stream".contains(pattern))
+        // Another copy of Lyps, or a path that merely looks similar, isn't touched.
+        #expect(!"/usr/bin/perl /Users/me/Lyps.app/Contents/Resources/mediaremote-adapter.pl x stream".contains(pattern))
+        #expect(!"/usr/bin/perl /ApplicationsXLyps.app/Contents/Resources/mediaremote-adapter.pl x".contains(pattern))
     }
 }

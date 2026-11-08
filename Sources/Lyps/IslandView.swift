@@ -36,11 +36,16 @@ struct IslandView: View {
         .opacity(shown ? 1 : 0)
         .scaleEffect(shown || reduceMotion ? 1 : 0.92)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Clicking opens the song's lyrics: to read their timings, edit, time or add them.
+        .onTapGesture { if model.status != .loading { model.onOpenLyrics() } }
+        .accessibilityAction(named: "Open lyrics") { model.onOpenLyrics() }
         .onHover { over in
             withAnimation(.easeOut(duration: 0.18)) { hovering = over }
         }
         .onChange(of: model.isVisible, initial: true) { _, visible in
             withAnimation(visible ? entrance : .easeOut(duration: 0.22)) { shown = visible }
+            // Hiding under the pointer sends no exit event, which would leave hover stuck on.
+            if !visible { hovering = false }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
@@ -91,8 +96,10 @@ struct IslandView: View {
                 slidingLines
             case .loading:
                 staticRows(first: model.track?.title ?? "", second: model.track?.artist ?? "")
+            case .plain:
+                staticRows(first: model.track?.title ?? "", second: "Lyrics aren't synced · click to read or time them")
             case .unavailable:
-                staticRows(first: model.track?.title ?? "", second: "No synced lyrics")
+                staticRows(first: model.track?.title ?? "", second: "No lyrics found · click to add them")
             }
             if !reduceMotion, let captionText {
                 caption(captionText)

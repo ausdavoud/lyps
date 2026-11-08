@@ -29,10 +29,19 @@ final class IslandPanel: NSPanel {
 
         placeAtTopCenter()
         setFrameAutosaveName("LypsIsland")
-        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) { placeAtTopCenter() }
+        keepOnScreen()
 
         applySettings()
         model.onVisibilityChange = { [weak self] visible in self?.setShown(visible) }
+        // A display unplugged under the island would leave it off-screen.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keepOnScreen() }
+        }
+    }
+
+    private func keepOnScreen() {
+        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) { placeAtTopCenter() }
     }
 
     override var canBecomeKey: Bool { false }

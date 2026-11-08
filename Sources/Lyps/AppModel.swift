@@ -9,7 +9,7 @@ private let log = Logger(subsystem: "app.lyps.Lyps", category: "playback")
 @Observable
 @MainActor
 final class AppModel {
-    enum LyricsStatus { case loading, found, unavailable }
+    enum LyricsStatus { case loading, found, plain, unavailable }
 
     let settings: Settings
     let bridge = NowPlayingBridge()
@@ -18,7 +18,14 @@ final class AppModel {
     @ObservationIgnored private lazy var adMuter = AdMuter(
         mute: { [weak self] in
             guard let self else { return }
-            self.settings.adMute.mute(spotifyOnly: { self.spotifyMute.mute() }, everything: SystemMute.mute)
+            self.settings.adMute.mute(
+                spotifyOnly: { fallback in
+                    self.spotifyMute.mute(failed: { [weak self] in
+                        // The ad may have ended while macOS was refusing.
+                        if self?.adStillMuted == true { fallback() }
+                    })
+                },
+                everything: SystemMute.mute)
         },
         unmute: { [weak self] in
             self?.spotifyMute.unmute()
@@ -28,6 +35,15 @@ final class AppModel {
     private(set) var track: Track?
     private(set) var status = LyricsStatus.loading
     private(set) var lines: [LyricLine] = []
+    /// Unsynced lyrics, shown in the Lyrics window and timed there by hand.
+    private(set) var plainLines: [String] = []
+    /// True when the lyrics are the user's own: timed or edited on this Mac.
+    private(set) var isMine = false
+
+    /// The lyrics as they play, with any timing nudge built into the times.
+    var effectiveLyrics: Lyrics {
+        Lyrics(synced: lines.map { LyricLine(time: $0.time + timingOffset, text: $0.text) }, plain: plainLines)
+    }
     /// Line being sung; -1 before the first line.
     private(set) var lineIndex = -1
     private(set) var artwork: NSImage?
@@ -39,6 +55,10 @@ final class AppModel {
     private(set) var nudgeLabel: String?
 
     @ObservationIgnored var onVisibilityChange: (Bool) -> Void = { _ in }
+    @ObservationIgnored var onOpenLyrics: () -> Void = {}
+
+    var playbackPosition: TimeInterval { state.position() }
+    var isPlaying: Bool { state.isPlaying }
 
     /// nil follows the automatic rules; true or false is the user's own choice via the shortcut.
     private var manual: Bool?
@@ -47,11 +67,14 @@ final class AppModel {
     /// What the bridge reported. `state` is what Lyps acts on: the same, unless Telegram resumed a song silently.
     private var reported = PlaybackState()
     private var silentState: PlaybackState?
-    private var state: PlaybackState { silentState ?? reported }
+    private var state: PlaybackState { silentState ?? PlayerChoice.current(reported: reported, spotify: polledSpotify) }
+    /// What Spotify itself said it's playing, while ad muting asks it.
+    private var polledSpotify: PlaybackState?
     private var silentResume: SilentResume?
     private var audioWatch: Timer?
     /// When Telegram's audio was first seen after the voice, so a brief blip doesn't count.
     private var audioOnSince: Date?
+    private var audioOffSince: Date?
     private var artworkSource: String?
     private var telegramSong: Track?
     private var telegramArtwork: String?
@@ -64,7 +87,9 @@ final class AppModel {
     private var lineTimer: DispatchWorkItem?
     private var hideTimer: DispatchWorkItem?
     private var nudgeLabelTimer: DispatchWorkItem?
-    private var knownMisses: Set<Track> = []
+    /// Songs LRCLIB has no synced lyrics for, remembered until Lyps quits so a later version can be found.
+    private var unsynced: [Track: Lyrics] = [:]
+    private let timedByUser = LyricsCache.timedByUser
     private let lrclib = LRCLIB()
     private let cache = LyricsCache.standard
 
@@ -142,15 +167,30 @@ final class AppModel {
     }
 
     private func pollSpotify() {
+        guard SpotifyScript.isRunning else {
+            // Spotify quit: any ad it was playing is over.
+            guard polledSpotify != nil || spotifyAd.endsAt != nil else { return }
+            polledSpotify = nil
+            spotifyAd.reset()
+            updateAdMute()
+            return refresh()
+        }
         SpotifyScript.ask { [weak self] spotify in
-            guard let self, self.settings.adMute != .off else { return }
+            guard let self, self.settings.enabled, self.settings.adMute != .off else { return }
+            self.polledSpotify = spotify
             self.spotifyAd.observe(spotify)
             self.updateAdMute()
+            self.refresh()
         }
     }
 
     private func updateAdMute() {
         adMuter.update(adPlaying: settings.adMute != .off && spotifyAd.adPlaying())
+        if adMuter.isMuted {
+            // Keeps the mute on whatever output is current, if it changed mid-ad.
+            if SystemMute.isActive { SystemMute.mute() }
+            spotifyMute.followDefaultOutput()
+        }
         adEndCheck?.cancel()
         guard let endsAt = spotifyAd.endsAt, endsAt > Date() else { return }
         // Wakes when the ad should end, in case Spotify isn't the app macOS reports by then.
@@ -159,6 +199,8 @@ final class AppModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + endsAt.timeIntervalSinceNow + 0.1, execute: check)
     }
 
+    private var adStillMuted: Bool { adMuter.isMuted }
+
     /// Gives sound back now: on quit, and when ad muting is turned off.
     func releaseAdMute() {
         adMuter.release()
@@ -166,10 +208,18 @@ final class AppModel {
 
     /// Settings changed: sources, the master switch, and so on.
     func settingsChanged() {
-        if settings.adMute == .off || !settings.enabled { adMuter.release() }
+        if settings.adMute == .off || !settings.enabled {
+            adMuter.release()
+            polledSpotify = nil
+        }
         let prompts = AdMuteMode.prompts(from: lastAdMute, to: settings.adMute)
         if prompts.audioCapture { spotifyMute.requestPermission() }
         if prompts.automation { SpotifyScript.requestPermission() }
+        if settings.adMute != lastAdMute {
+            // Switching modes mid-ad moves the mute over to the new mode now.
+            adMuter.release()
+            updateAdMute()
+        }
         lastAdMute = settings.adMute
         updateSpotifyPoll()
         if settings.enabled {
@@ -250,6 +300,10 @@ final class AppModel {
     /// Decides, on each bridge update, whether Telegram's audio is the only sign of the song.
     private func followTelegramAfterVoice() {
         guard var resume = silentResume, settings.enabled else { return endSilentResume() }
+        if TelegramResume.anotherPlayerTookOver(reported) {
+            log.info("telegram: another player started; silent resume no longer needed")
+            return endSilentResume()
+        }
         let telegram = Source(bundleID: reported.bundleID) == .telegram
         let realSong = telegram && !reported.title.isEmpty
             && Privacy.isSafeTelegramLookup(title: reported.title, artist: reported.artist)
@@ -283,6 +337,7 @@ final class AppModel {
     private func startAudioWatch() {
         guard audioWatch == nil else { return }
         audioOnSince = nil
+        audioOffSince = nil
         audioWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkTelegramAudio() }
         }
@@ -304,8 +359,15 @@ final class AppModel {
     private func checkTelegramAudio() {
         guard var resume = silentResume else { return stopAudioWatch() }
         let now = Date()
+        let silentFor = audioOffSince.map { now.timeIntervalSince($0) } ?? 0
+        guard TelegramAudio.isRunning, silentFor < TelegramResume.giveUpAfter else {
+            log.info("telegram: quit, or silent too long; silent resume no longer needed")
+            endSilentResume()
+            return refresh()
+        }
         let wasPlaying = resume.isPlaying
         if TelegramAudio.isPlaying() {
+            audioOffSince = nil
             let since = audioOnSince ?? now
             audioOnSince = since
             // Needs a full second of sound, so a voice message's tail isn't taken for the song.
@@ -315,6 +377,7 @@ final class AppModel {
             }
         } else {
             audioOnSince = nil
+            if audioOffSince == nil { audioOffSince = now }
             if resume.isPlaying {
                 resume.pause(at: now)
                 log.info("telegram: silent song paused at \(resume.position, privacy: .public)s")
@@ -346,6 +409,8 @@ final class AppModel {
     private func begin(_ newTrack: Track) {
         track = newTrack
         lines = []
+        plainLines = []
+        isMine = false
         lineIndex = -1
         status = .loading
         timingOffset = settings.timingOffset(for: newTrack)
@@ -357,32 +422,67 @@ final class AppModel {
         lookup?.cancel()
         lookup = Task { [weak self] in
             guard let self else { return }
-            let found = await self.lyrics(for: newTrack)
+            let (found, mine) = await self.lyrics(for: newTrack)
             guard !Task.isCancelled, self.track?.title == newTrack.title, self.track?.artist == newTrack.artist else { return }
-            self.lines = found
-            self.status = found.isEmpty ? .unavailable : .found
-            log.info("lyrics: \(found.count, privacy: .public) lines for \(newTrack.title, privacy: .private(mask: .hash))")
+            self.lines = found.synced
+            self.plainLines = found.plain
+            self.isMine = mine
+            self.status = !found.synced.isEmpty ? .found : !found.plain.isEmpty ? .plain : .unavailable
+            log.info("lyrics: \(found.synced.count, privacy: .public) synced, \(found.plain.count, privacy: .public) plain lines for \(newTrack.title, privacy: .private(mask: .hash))")
             self.syncLine()
             self.updateIdleTimer()
             self.updateVisibility()
         }
     }
 
-    private func lyrics(for track: Track) async -> [LyricLine] {
-        if let cached = cache.load(track) { return cached }
-        if knownMisses.contains(track) { return [] }
+    private func lyrics(for track: Track) async -> (Lyrics, mine: Bool) {
+        if let mine = timedByUser.load(track) { return (mine, true) }
+        if let cached = cache.load(track) { return (cached, false) }
+        if let known = unsynced[track] { return (known, false) }
         do {
             let found = try await lrclib.lyrics(for: track)
-            if found.isEmpty {
-                knownMisses.insert(track)
+            if found.synced.isEmpty {
+                unsynced[track] = found
             } else {
-                cache.save(found, for: track)
+                try? cache.save(found, for: track)
             }
-            return found
+            return (found, false)
         } catch {
-            // Not remembered as a miss, so the song is tried again next time.
-            return []
+            // Not remembered, so the song is tried again next time.
+            return (Lyrics(), false)
         }
+    }
+
+    /// Keeps lyrics the user timed by hand.
+    func saveTiming(_ session: TimingSession) throws {
+        try saveLyrics(Lyrics(synced: session.result, plain: session.lines), for: session.track)
+    }
+
+    /// Keeps the user's own version of a song's lyrics, and shows it now if that song is playing.
+    /// Its times are what plays, so any old nudge is cleared rather than applied twice.
+    func saveLyrics(_ lyrics: Lyrics, for song: Track) throws {
+        try timedByUser.save(lyrics, for: song)
+        unsynced[song] = nil
+        settings.setTimingOffset(0, for: song)
+        guard track?.title == song.title, track?.artist == song.artist else { return }
+        timingOffset = 0
+        lines = lyrics.synced
+        plainLines = lyrics.plain
+        isMine = true
+        status = !lyrics.synced.isEmpty ? .found : !lyrics.plain.isEmpty ? .plain : .unavailable
+        noLyricsExpired = false
+        lineIndex = -1
+        syncLine()
+        updateIdleTimer()
+        updateVisibility()
+    }
+
+    /// Drops the user's own version of the playing song and looks its lyrics up again.
+    func useLRCLIBVersion() throws {
+        guard let track else { return }
+        try timedByUser.remove(track)
+        unsynced[track] = nil
+        begin(track)
     }
 
     /// Sets the current line and wakes exactly when the next one is due, so nothing polls.

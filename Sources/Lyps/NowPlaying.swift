@@ -2,17 +2,14 @@ import AppKit
 import CoreAudio
 import os
 
+/// The players Lyps follows. Anything else macOS reports is ignored.
 enum Source: String, CaseIterable {
-    case spotify, telegram, browser
+    case spotify, telegram
 
     init?(bundleID: String) {
         switch bundleID {
         case "com.spotify.client": self = .spotify
         case "com.tdesktop.Telegram", "ru.keepcoder.Telegram": self = .telegram
-        case "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.brave.Browser",
-             "company.thebrowser.Browser", "com.microsoft.edgemac", "org.chromium.Chromium",
-             "app.zen-browser.zen", "com.operasoftware.Opera", "com.vivaldi.Vivaldi":
-            self = .browser
         default: return nil
         }
     }
@@ -75,6 +72,24 @@ struct SilentResume {
 }
 
 enum TelegramAudio {
+    private static let bundleIDs = ["com.tdesktop.Telegram", "ru.keepcoder.Telegram"]
+
+    static var isRunning: Bool {
+        bundleIDs.contains { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty }
+    }
+
+    /// Bundle IDs of processes macOS knows as audio clients, such as an app's helper processes.
+    static func bundleIDs(withPrefix prefix: String) -> [String] {
+        audioProcesses().compactMap { process in
+            var query = address(kAudioProcessPropertyBundleID)
+            var value: Unmanaged<CFString>?
+            var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            guard AudioObjectGetPropertyData(process, &query, 0, nil, &size, &value) == noErr,
+                  let id = value?.takeRetainedValue() as String?, id.hasPrefix(prefix) else { return nil }
+            return id
+        }
+    }
+
     /// Whether macOS reports Telegram producing sound. Reading this needs no permission.
     static func isPlaying() -> Bool {
         #if DEBUG
@@ -82,8 +97,7 @@ enum TelegramAudio {
             return FileManager.default.fileExists(atPath: flag)
         }
         #endif
-        let telegram = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.tdesktop.Telegram")
-            + NSRunningApplication.runningApplications(withBundleIdentifier: "ru.keepcoder.Telegram")).map(\.processIdentifier)
+        let telegram = bundleIDs.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }.map(\.processIdentifier)
         guard !telegram.isEmpty else { return false }
         return audioProcesses().contains { process in
             telegram.contains(property(process, kAudioProcessPropertyPID, pid_t(0)))
@@ -116,10 +130,29 @@ enum TelegramAudio {
 enum TelegramResume {
     /// Telegram can resume music after a voice message with the title wiped. It also publishes no
     /// title when an item is replayed or between tracks, voice messages included. Only a resume
-    /// carries on from where the remembered song paused; anything else starts near zero.
+    /// carries on from where the remembered song paused; anything else starts near zero, so a song
+    /// paused in its first seconds can't be told apart and isn't continued.
     static func song(title: String, position: TimeInterval, remembered: Track?, pausedAt: TimeInterval) -> Track? {
-        guard title.isEmpty, let remembered, abs(position - pausedAt) <= 2.5 else { return nil }
+        guard title.isEmpty, let remembered, pausedAt > 2.5, abs(position - pausedAt) <= 2.5 else { return nil }
         return remembered
+    }
+
+    /// Another player started, so a Telegram song continuing silently isn't what's playing anymore.
+    static func anotherPlayerTookOver(_ reported: PlaybackState) -> Bool {
+        guard let source = Source(bundleID: reported.bundleID) else { return false }
+        return source != .telegram && reported.isPlaying
+    }
+
+    /// With no Telegram sound for this long after a voice message, the song isn't coming back.
+    static let giveUpAfter: TimeInterval = 600
+}
+
+enum PlayerChoice {
+    /// macOS reports one app, and can keep reporting one that's paused (a Telegram song, say) while
+    /// Spotify plays on. Spotify's own answer is used then, so its lyrics and ads aren't missed.
+    static func current(reported: PlaybackState, spotify: PlaybackState?) -> PlaybackState {
+        guard !reported.isPlaying, let spotify, spotify.isPlaying else { return reported }
+        return spotify
     }
 }
 
@@ -144,10 +177,7 @@ struct PlaybackState {
     var trackNumber: Int? { (fields["trackNumber"] as? NSNumber)?.intValue }
     var isAdvertisement: Bool { fields["isAdvertisement"] as? Bool ?? false }
     var duration: TimeInterval { (fields["durationMicros"] as? Double ?? 0) / 1_000_000 }
-    /// Browsers report through helper processes, so the parent app is the one that identifies them.
-    var bundleID: String {
-        fields["parentApplicationBundleIdentifier"] as? String ?? fields["bundleIdentifier"] as? String ?? ""
-    }
+    var bundleID: String { fields["bundleIdentifier"] as? String ?? "" }
 
     var rate: Double {
         let reported = fields["playbackRate"] as? Double ?? 1
@@ -192,7 +222,26 @@ final class NowPlayingBridge {
         wanted = true
         let bundle = Bundle.main.bundleURL
         if bundle.pathExtension == "app" { Self.clearQuarantine(in: bundle) }
+        Self.stopLeftoverBridges()
         launch()
+    }
+
+    nonisolated(unsafe) private static var leftoversChecked = false
+
+    /// A bridge outlives Lyps when Lyps is force-quit or crashes, and keeps running until its next
+    /// write fails. Those have no parent left, which tells them apart from another copy's bridge.
+    private static func stopLeftoverBridges() {
+        guard !leftoversChecked, let script = Bundle.main.path(forResource: "mediaremote-adapter", ofType: "pl") else { return }
+        leftoversChecked = true
+        let pkill = Process()
+        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        pkill.arguments = ["-P", "1", "-f", leftoverPattern(script: script)]
+        try? pkill.run()
+        pkill.waitUntilExit()
+    }
+
+    static func leftoverPattern(script: String) -> String {
+        "^/usr/bin/perl " + NSRegularExpression.escapedPattern(for: script) + " "
     }
 
     /// perl refuses to load the bridge from an app bundle still flagged as downloaded. Running at all

@@ -45,12 +45,14 @@ Play a song in Spotify or Telegram and Lyps shows the current line, with the nex
 
 - **Real Liquid Glass.** Uses Apple's native `glassEffect`, lightly tinted with the song's artwork.
 - **Synced line by line.** Each line slides up into place as it's sung.
-- **Works across players.** Spotify and Telegram Desktop are on by default, and browsers such as YouTube are one switch away.
+- **Spotify and Telegram.** Both are on by default, and each can be turned off.
 - **Fix the timing yourself.** Lyrics running early or late? Nudge them, and Lyps remembers that for the song.
 - **Everything is switchable.** Always-on-top, auto-show, artwork, next line, each source and every shortcut.
 - **Small and quiet.** A menu bar app with no Dock icon. It wakes only when the next line is due instead of polling.
 - **Right-to-left aware.** Persian, Arabic and Hebrew lines align to the right.
 - **Mutes Spotify ads.** Optional: silence everything, or only Spotify, while an ad plays. Sound comes back when the ad ends.
+- **Your own lyrics.** Click the island to see a song's lyrics with their timings. Edit, break or add lines, type or paste lyrics for songs LRCLIB doesn't have, and time them by tapping Space along with the song. Your version stays on this Mac, and you can publish it to LRCLIB to share it.
+- **Check for updates.** From the menu anytime, or automatically once a day if you turn it on.
 
 ## Download
 
@@ -71,15 +73,14 @@ To check your download first, compare `shasum -a 256 Lyps-*.dmg` with the checks
 
 **Lyps asks for no special permissions** unless you turn on ad muting. You won't need to allow it under Accessibility, Input Monitoring, Screen Recording or Microphone, and it can't read your screen or your keystrokes. Its shortcuts use a system API that only reports the key combinations it registered. After a Telegram voice message, it checks whether Telegram is producing sound, which tells it nothing about what the sound is.
 
-**What leaves your Mac:** the title, artist, album and duration of playing songs go to [LRCLIB](https://lrclib.net) to find lyrics. There's no account or analytics.
+**What leaves your Mac:** the title, artist, album and duration of playing songs go to [LRCLIB](https://lrclib.net) to find lyrics. There's no account or analytics. If you turn on automatic update checks, Lyps also asks GitHub once a day for the latest version. Publishing lyrics to LRCLIB only happens when you click Publish and confirm; what you publish is public.
 
-**What stays on your Mac:** lyrics are cached in `~/Library/Caches/Lyps`, and your settings and timing nudges are saved in your preferences.
+**What stays on your Mac:** lyrics are cached in `~/Library/Caches/Lyps`; lyrics you time yourself are kept in `~/Library/Application Support/Lyps/Timed`, where macOS won't clear them; and your settings and timing nudges are saved in your preferences.
 
 | Source | Default | What to know |
 |---|---|---|
 | Spotify | On | |
 | Telegram | On | Voice messages are never looked up. Telegram reports them with the date as the title and the sender as the artist, so Lyps skips anything shaped like that. A song with a clock time in its title, like "12:51", gets no lyrics as a result. |
-| Browsers (YouTube) | Off | When on, the title of any video that plays is sent to LRCLIB. |
 
 You can turn each source off in Settings. Turning Lyps off stops it reading Now Playing and sending anything.
 
@@ -96,10 +97,10 @@ Off by default. Turn it on in **Settings → Ads**, and macOS asks for what that
 | Mute all sound | Your Mac's output, during the ad | **Automation** for Spotify |
 | Mute only Spotify | Spotify alone; everything else keeps playing | **Automation** for Spotify, and **System Audio Recording** |
 
-- **Automation** lets Lyps ask Spotify what it's playing, once a second while Spotify is open. macOS sometimes keeps showing another app as playing while Spotify plays on, and asking Spotify directly catches ads anyway. Lyps only reads the current track; it never controls Spotify or opens it.
+- **Automation** lets Lyps ask Spotify what it's playing, once a second while Spotify is open. macOS sometimes keeps showing another app as playing (a paused Telegram song, say) while Spotify plays on; asking Spotify directly catches ads anyway, and keeps Spotify's lyrics showing. Lyps only reads the current track; it never controls Spotify or opens it.
 - **System Audio Recording** is how macOS lets an app silence another app. Lyps receives Spotify's sound during the ad and discards it; nothing is saved, analyzed or sent anywhere.
 - If you decline, ads are still caught whenever macOS shows Spotify as playing, and muting only Spotify falls back to muting all sound.
-- If Lyps quits in the middle of an ad, your sound is restored the next time it opens.
+- Pausing an ad unmutes until it plays again. Switching outputs mid-ad, like plugging in headphones, moves the mute along. If Lyps quits in the middle of an ad, your sound is restored the next time it opens.
 
 ## Shortcuts
 
@@ -116,7 +117,7 @@ You can change any of these in Settings. While Lyps is running, these key combin
 
 ```mermaid
 flowchart LR
-    A["Spotify, Telegram, browser"] --> B["macOS Now Playing"]
+    A["Spotify, Telegram"] --> B["macOS Now Playing"]
     B --> C["Bridge"]
     C --> D["Lyps"]
     E["LRCLIB"] --> D
@@ -131,9 +132,9 @@ flowchart LR
 
 - **It depends on a workaround.** A macOS update could block the Now Playing bridge. Lyps would then show a warning in its menu until the bridge catches up.
 - **Lyric quality varies.** Timings are submitted by volunteers, so some are off, and the nudge shifts a whole song rather than a single verse. Coverage is thinner for less mainstream music, and Telegram files with poor tags match less often.
-- **Songs without synced lyrics** show their name briefly, then the island hides.
+- **Songs without any lyrics** show their name briefly, then the island hides. You can add and time them yourself; they stay on this Mac unless you publish them.
 - **Telegram after a voice message.** Telegram resumes the song but stops reporting it to macOS. Lyps keeps the lyrics going from where the song paused, using Telegram's sound to follow pause and play. Seeking in that state isn't tracked until the next track.
-- **Spotify ads only.** YouTube reports its ads to macOS as ordinary videos, so they can't be told apart without a browser extension. An ad longer than about a minute isn't recognized.
+- **Spotify ads only.** Ads read by a podcast's host are part of the episode and can't be detected. Without the Automation permission, an ad longer than about a minute isn't recognized.
 - **Mac only for now.** It can't be on the App Store, because the bridge isn't allowed in the sandbox. Builds include Apple Silicon and Intel, but only Apple Silicon has been tested.
 
 ## Build from source

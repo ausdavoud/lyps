@@ -22,11 +22,10 @@ struct SettingsView: View {
             Section {
                 Toggle("Spotify", isOn: $settings.spotify)
                 Toggle("Telegram", isOn: $settings.telegram)
-                Toggle("Browsers (YouTube)", isOn: $settings.browsers)
             } header: {
                 Text("Sources")
             } footer: {
-                Text("Song titles and artists are sent to LRCLIB to find lyrics. With Browsers on, that includes the title of any video that plays. Telegram voice messages are never sent.")
+                Text("Song titles and artists are sent to LRCLIB to find lyrics. Telegram voice messages are never sent.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -38,7 +37,15 @@ struct SettingsView: View {
             } header: {
                 Text("Ads")
             } footer: {
-                Text("Sound comes back as soon as the ad ends. Muting only Spotify needs the System Audio Recording permission, which macOS asks for the first time; Lyps doesn't record or listen to anything. YouTube ads can't be detected.")
+                Text("Sound comes back as soon as the ad ends. Muting only Spotify needs the System Audio Recording permission, which macOS asks for the first time; Lyps doesn't record or listen to anything.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle("Check for updates automatically", isOn: $settings.checkForUpdates)
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("Lyps asks GitHub for the latest version once a day, and the menu says when one is out. You can also check from the menu anytime.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Shortcuts") {
@@ -81,7 +88,7 @@ private struct ShortcutRow: View {
         } label: {
             Text(title)
             if failed {
-                Text("Another app is using this shortcut.").font(.caption).foregroundStyle(.red)
+                Text("This shortcut is taken, by another app or another Lyps shortcut.").font(.caption).foregroundStyle(.red)
             }
         }
         .onDisappear(perform: stopRecording)
