@@ -85,7 +85,7 @@ To check your download first, compare `shasum -a 256 Lyps-*.dmg` with the checks
 You can turn each source off in Settings. Turning Lyps off stops it reading Now Playing and sending anything.
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="420" alt="The Lyps Settings window with switches for behavior, island, sources and shortcuts">
+  <img src="docs/screenshots/settings.png" width="420" alt="The Lyps Settings window with switches for behavior, island, Spotify and Telegram, ad muting, updates and shortcuts">
 </p>
 
 ### Muting Spotify ads
